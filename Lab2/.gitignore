@@ -1,4 +1,8 @@
 # Ignore everything in this directory
 *
-# Except this file
+
+# Except these files
 !.gitignore
+!Lab2.cf
+!Interpreter.hs
+!TypeChecker.hs
