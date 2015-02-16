@@ -47,9 +47,14 @@ inferExp env x = case x of
     typ <- lookupVar env i
     return typ
 
-  EApp i _ -> do 
-      (func,ft) <- lookupFun env i
-      return ft
+  EApp i es -> do 
+    (func,ft) <- lookupFun env i
+    if (length es /= length func) 
+      then 
+        fail $ "incorrect number of arguments to function " ++ printTree i
+      else
+        --ft <$ zipWithM_ (checkExp env) es func
+        return ft
     
   EPostIncr e -> do
     t <- inferExp env e
@@ -94,16 +99,36 @@ inferExp env x = case x of
     inferBin [Type_int, Type_double] env e1 e2
  -- ELt Exp Exp
   ELt e1 e2 -> do
-    inferBin [Type_int, Type_double] env e1 e2
+    a <- inferBin [Type_int, Type_double, Type_bool] env e1 e2 
+    if a `elem` [Type_int, Type_double]
+      then
+        return Type_bool
+      else
+        return a
  -- EGt Exp Exp
   EGt e1 e2 -> do
-    inferBin [Type_int, Type_double] env e1 e2
+    a <- inferBin [Type_int, Type_double, Type_bool] env e1 e2 
+    if a `elem` [Type_int, Type_double]
+      then
+        return Type_bool
+      else
+        return a
  -- ELtEq Exp Exp
   ELtEq e1 e2 -> do
-    inferBin [Type_int, Type_double] env e1 e2
+    a <- inferBin [Type_int, Type_double, Type_bool] env e1 e2 
+    if a `elem` [Type_int, Type_double]
+      then
+        return Type_bool
+      else
+        return a
  -- EGtWq Exp Exp
   EGtEq e1 e2 -> do
-    inferBin [Type_int, Type_double] env e1 e2
+    a <- inferBin [Type_int, Type_double, Type_bool] env e1 e2 
+    if a `elem` [Type_int, Type_double]
+      then
+        return Type_bool
+      else
+        return a
  -- EEq Exp Exp
   EEq e1 e2 -> do
     a <- inferBin [Type_int, Type_double, Type_bool] env e1 e2 
@@ -164,17 +189,23 @@ inferBin types env exp1 exp2 = do
 -- a call to lookup that comes out as pattern maching
 
 typecheck :: Program -> Err ()
-typecheck (PDefs defs) = do 
+typecheck (PDefs defs) = do
   let env0 = Env ((Map.fromList std_functions), [])  -- [] might not be a good idea
   env <- foldM updateFun env0 defs
   mapM_ (checkDef env) defs
   --fail $ (Map.showTree (con !! 0))
- 
+
 checkDef :: Env -> Def -> Err ()
 checkDef env d@(DFun t f args ss) = do
-  env' <- foldM (\ env (ADecl t x) -> (updateVar env t x)) (newBlock env) args
-  mapM_ (checkExp env t) (findReturn ss) 
-  checkStms env'  ss
+  let env'' = newBlock env
+  env' <- foldM (\ env'' (ADecl t x) -> (updateVar env'' t x)) (env'') args
+  --checkStms env' ss
+  env3 <- foldM checkStm env' ss
+  --let env'' = newBlock env
+  --Env (sig',context') <- (helpfunction env' (map (\(ADecl t x)-> t ) args) (map (\(ADecl t x)-> x) args))
+  mapM_ (checkExp env3 t) (findReturn ss) 
+  
+  
 
 findReturn :: [Stm] -> [Exp]
 findReturn [] = []
@@ -190,22 +221,40 @@ checkStms :: Env -> [Stm] -> Err ()
 checkStms env ss = foldM_ checkStm env ss
 
 checkStm :: Env -> Stm -> Err Env
-checkStm env s = case s of
+checkStm env@(Env (sig, (c:con))) s = case s of
   SInit t x e -> do
     checkExp env t e
     updateVar env t x
-  SExp e -> env <$ inferExp env e
-  SReturn e -> env <$ inferExp env e
+  SExp e -> do 
+    t' <- inferExp env e
+    checkExp env t' e 
+    return env
+--  SReturn e -> do
+--    t' <- inferExp env e
+    --checkExp env t' e 
+--    return env
+
+  SReturn e -> do
+    --fail $ Map.showTree c ++ " - "
+    t' <- inferExp env e
+    --fail $ Map.showTree c ++ " - " ++ printTree t'
+    return env
+  --env <$ inferExp env e
   SWhile e s -> do 
     t' <- inferExp env e
     if (t' == Type_bool) 
-      then 
-        checkStm env s
+      then
+        do 
+        a <- checkStm env s
+        return env
       else
-        fail $ "NOT my bool"
+        fail $ "While: " ++ printTree e ++ " Has type " ++ printTree t'  
         
   SBlock ss -> do 
-    checkStms env ss
+    let env1 = newBlock env
+    --checkStms env1 ss
+    --return env1
+    checkStms env1 ss
     return env
   
   SIfElse e s1 s2 -> do
@@ -217,18 +266,17 @@ checkStm env s = case s of
         b <- checkStm env s2
         return env
       else
-        fail $ "NOT my bool"
+        fail $ "IF Else: " ++ printTree e ++ " Has type " ++ printTree t' 
   SDecls t xs -> do
-    env1 <- helpfunction env t xs
+    env1 <- helpfunction env (take (length xs) (repeat t))  xs
     return env1 
   --_ -> fail $ "NYI: checkStm "  ++ printTree s
 
-helpfunction :: Env -> Type -> [Id] -> Err Env  
+helpfunction :: Env -> [Type] -> [Id] -> Err Env  
 helpfunction  env t [] = return env
-helpfunction  env t (i:is) = do 
-     env1 <- updateVar env t i
-     helpfunction env1 t is
-
+helpfunction  env (t:ts) (i:is) = do 
+  env1 <- updateVar env t i
+  helpfunction env1 ts is
 
 checkExp :: Env -> Type -> Exp -> Err () 
 checkExp env typ expr  = do 
@@ -244,30 +292,32 @@ checkExp env typ expr  = do
 --  + Auxiliary operations on the environment
 lookupVar :: Env -> Id -> Err Type
 lookupVar (Env (sig,context)) x = case catMaybes $ map (Map.lookup x) context of
-  []      -> fail $ "unbound variable " -- ++ printTree x
+  []      -> fail $ "unbound variable " ++ printTree x
   (t : _) -> return t
 
 lookupFun :: Env -> Id -> Err ([Type],Type) 
 lookupFun (Env (sig,context)) f = case Map.lookup f sig of
-  Nothing -> fail $ "undefined function " -- ++ printTree f
+  Nothing -> fail $ "undefined function " ++ printTree f
   Just t  -> return t
 
 updateVar :: Env -> Type -> Id -> Err Env
 updateVar (Env (sig,(c:con))) t i = do
-  if (elem True (map (Map.member i) (c:con)))
+  if (Map.member i c)
     then
-      fail $ "duplicate variable" ++ show i ++ "found"
+      fail $ "duplicate variable " ++ printTree i ++ " found"
     else
       return (Env (sig,((Map.insert i t c):con)))
+--updateVar b t i = fail $ ("-> "++ (printTree t) ++" "++ (printTree i))
 
 --extendCxt env@Env{ envCxt = b : bs } x t = env { envCxt = Map.insert x t b : bs }
 
 updateFun :: Env -> Def -> Err Env
-updateFun (Env (sig,context)) (DFun ty i args ss) = do
+updateFun d@(Env (sig,context)) (DFun ty i args ss) = do
   if Map.member i sig  
     then
-      fail $ "duplicate function" 
+      fail $ "duplicate function "  ++ printTree i ++ " found" 
     else
+      do
       return (Env ((Map.insert i (is,ty) sig), context)) where is = (map (\ (ADecl t _x) -> t) args)
 
 newBlock :: Env -> Env 
@@ -278,6 +328,13 @@ emptyEnv :: Env
 emptyEnv = Env (Map.empty,[Map.empty])
 
 --[c1,c2,c3. osv] -> true `elem` [true,true]
+
+--------------------------
+--1,10,104,105
+--------------------------
+-- 1. first environment -> emptyEnv
+-- 2. newBlocks for all defs
+
 
 
 
