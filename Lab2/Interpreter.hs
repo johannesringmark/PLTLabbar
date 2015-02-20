@@ -71,17 +71,17 @@ exec env s = case s of
     if ((\ (VBool x) -> x) v)
       then 
         do
-          (v,env3) <- (exec env2 s)
-          exec env3 (SWhile e s)
+          (v,env3) <- (exec env2 s)  
+          exec env3 (SWhile e s) 
       else 
-        return (VUndefined,env2)
+        return (VUndefined,env)
+
+
 
   SBlock ss -> do
     let env2 = newBlock env
-    foldM (exechelp) (VUndefined,env2) ss
-     
-
-    --return (exitBlock env3)
+    (v,env3) <- (foldM (exechelp) (VUndefined,env2) ss)
+    return (v,(exitBlock env3))
 
   SIfElse e s1 s2 -> do 
     (v, env2) <- eval env e
@@ -92,7 +92,9 @@ exec env s = case s of
         exec env2 s2
 
   SReturn e -> do 
-       eval env e
+      let (Env (sig,(con))) = env
+      --putStrLn $ ((Map.showTree (con !! 0)) )
+      eval env e
       
 
 
@@ -296,8 +298,11 @@ setVar :: Env -> Val -> Id -> Env
 setVar (Env (sig,(c:con))) v i = case (c:con) of
   [] -> error $ "unbound variable " ++ printTree i
   (x:xs) -> case Map.member i x of
-    True -> (Env (sig, (Map.insert i v x : (c:con))))
-    False -> setVar (Env (sig,(con))) v i
+    True -> (Env (sig, (Map.insert i v x :con)))
+    False -> addContex c (setVar (Env (sig,con)) v i)
+
+addContex :: Context -> Env -> Env 
+addContex c (Env (sig,con)) = (Env (sig,(c:con)))
 
 newBlock :: Env -> Env 
 newBlock (Env (sig,context)) = Env (sig, Map.empty : context)
